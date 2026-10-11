@@ -163,13 +163,13 @@ ui/src/components/            Game, Leaderboard, SubmitPanel, WalletBar
 ### Contract
 
 ```bash
-forge install foundry-rs/forge-std   # lib/ is not vendored in git
-forge test -vv                       # 32 tests (unit, edge, fuzz, invariants)
+git submodule update --init --recursive   # forge-std pinned at v1.17.0
+forge test -vv                            # 32 tests (unit, edge, fuzz, invariants)
 forge script script/Deploy.s.sol -vv
 ```
 
-`lib/` is git-ignored (standard Foundry). `remappings.txt` maps
-`forge-std/=lib/forge-std/src/`.
+`lib/forge-std` is a git submodule pinned to `v1.17.0` (see `.gitmodules`).
+`remappings.txt` maps `forge-std/=lib/forge-std/src/`.
 
 ### Frontend
 
