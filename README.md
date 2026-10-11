@@ -1,235 +1,108 @@
-# SpeedrunGhosts
+# Speedrun Ghosts: A Leaderboard That Checks Your Run
 
-A tiny, deterministic, **on-chain speedrun** game on **Base Sepolia**. You record a
-run on a canvas, submit the raw per-tick input bytes in a transaction, and the
-smart contract **replays those bytes itself** through the same integer physics to
-compute your time. No server, no owner, no trusted timer.
+A one-screen deterministic platformer where the chain is the referee. The browser records your button presses, the contract replays them through the level itself and decides your time. The leaderboard shows only chain-verified times, and ghosts are replayed from verified runs, so an edited client can put nothing on the board.
 
-The frontend (React + Vite + wagmi/viem + HTML canvas) and the Foundry test suite
-share **one physics implementation**, so what you see locally is exactly what the
-chain computes.
+Built for Road to Devcon VIII, problem "Speedrun Ghosts".
 
----
+## Deployment
 
-## The game
+| Item | Value |
+|---|---|
+| Network | Base Sepolia (chain ID 84532) |
+| Contract | [`0xb805983974b9407bf8517D1ad11548A820Fa09A7`](https://sepolia.basescan.org/address/0xb805983974b9407bf8517D1ad11548A820Fa09A7) |
+| Deploy tx | [`0xb1583beef6062d7e8f1d1302f2ad0d9dfd016bd422c5f5d42defb17182565cd4`](https://sepolia.basescan.org/tx/0xb1583beef6062d7e8f1d1302f2ad0d9dfd016bd422c5f5d42defb17182565cd4) |
+| Deployment block | `47984918` |
+| Max input length | `600` ticks (constant `MAX_TICKS`) |
 
-One level, side-view runner. The player auto-moves right at `speed = 3` units per
-tick. The only input is **jump**, encoded as one byte per tick
-(`0 = none`, `1 = jump`). A jump is only allowed while standing on the ground
-(`y == 0`); gravity and jump velocity are integers. Spikes kill; a solid wall
-blocks horizontal movement until you clear it. Reaching `x >= goalX` finishes the
-run; the finish tick is the time.
+A machine-readable copy lives in [`deployments/base-sepolia.json`](deployments/base-sepolia.json).
 
-Level (`level/level.json`): `speed 3`, `gravity 1`, `jumpVy 9`, `goalX 600`,
-3 spike ranges, 1 solid wall. A clean run is **200 ticks** and forces **4 jumps**.
-Times are shown as `ticks (seconds)` where `seconds = ticks / 60`.
+## How a run is verified
 
-### Controls
+1. The client records one input per tick (`1 byte per tick: 0 = no input, 1 = jump`; any other byte is rejected).
+2. `submitRun(bytes inputs)` reverts if `inputs.length > MAX_TICKS`.
+3. The contract steps the inputs through the game logic with integer physics. Each step tests the player against level data: solids block movement, hazards end the run.
+4. If the simulation does not reach the goal, the call reverts and nothing is recorded.
+5. The time is the tick at which the goal is reached. It is never a caller-supplied argument.
+6. A player's best is overwritten only if the new time is strictly lower.
+7. Verified inputs are stored in contract storage (`_bestInputs`) and emitted in the `RunVerified` event, so any client can replay them as a ghost.
 
-| Input | Action |
-| --- | --- |
-| `Space` / tap / click on the canvas | Start the run, then jump |
-| `R` | Reset the run |
+## Determinism
 
----
+- **Integer-only physics.** Positions and velocities use integer constants; the step uses `|0` coercion and contains no divisions and no floats. No browser clock delta ever enters the step. The step runs once per fixed tick.
+- **Same rules in two runtimes.** Solidity step: `src/SpeedrunGhosts.sol` (the `submitRun` replay loop). JS step: `shared/sim.ts` (`step()`).
+- **Single level source.** Option B: the deploy script (`script/Deploy.s.sol` via `script/LevelData.sol`) and the client (`ui/src/lib/level.ts`) both import the same `level/level.json`. The deployed values are also readable on-chain via `getLevel()`.
 
-## How verification works (the chain is the referee)
+## Contract (`src/SpeedrunGhosts.sol`)
 
-1. The UI runs a fixed-tick loop. Real time is only used by an **accumulator**;
-   when it crosses a tick boundary, the game advances exactly one whole tick.
-   The wall-clock delta is **never** fed into the physics.
-2. Each tick appends one input byte to a `Uint8Array`.
-3. "Submit to chain" sends those bytes to `submitRun(bytes inputs)`.
-4. The contract steps the same integer physics, byte by byte, from the stored
-   level, and derives the tick count itself. It reverts with `RunDied`,
-   `GoalNotReached`, `InputTooLong`, or `EmptyInputs` on an invalid run.
-5. On success the dapp reads back `bestTime(address)` and shows
-   **"Chain-verified time: N ticks (x.xx s)"**.
-6. `submitRun` is bounded by `MAX_TICKS = 600`, so verification cost is capped.
+| Item | Detail |
+|---|---|
+| Submit | `submitRun(bytes inputs)` |
+| Personal best | `mapping(address => uint32) _bestTime` (+ `mapping(address => bytes) _bestInputs`) |
+| Reads | `bestTime(player)`, `getLeaderboard(offset, limit)`, `bestInputs(player)`, `playersCount()`, `getLevel()` |
+| Events | `RunVerified(address indexed player, uint32 time, bytes inputs)` |
+| Admin | none: no owner, no way to set or edit a time |
 
-There is **no time argument, no signature, and no owner/admin path**. Nothing can
-set a time except the simulation replaying the submitted bytes.
+## Game
 
-### Why an edited client gets nothing onto the board
+- Controls: `Space` / tap = jump. `R` = reset.
+- Practice works without a wallet or ETH.
+- Submitting a run to the leaderboard needs a wallet with Base Sepolia test ETH for gas. Sponsored gas is not implemented.
+- Click a leaderboard entry to load its verified run as a ghost, then race it.
 
-The local "preview" time is untrusted and never uploaded as a number. The dapp
-only uploads **input bytes**. The contract ignores anything the client claims and
-re-simulates those bytes against its own stored level. Editing the client to draw
-a fake finish, to skip rendering, or to report a fabricated time changes nothing
-— the chain will replay the raw bytes and either finish at the real tick, die on
-a spike, never reach the goal, or run too long, and then reject the run. Also,
-`bestInputs` / `RunVerified` make every verified run auditable from chain data.
+## Frontend (`ui/`)
 
----
+| Concern | Implementation |
+|---|---|
+| Chain | `baseSepolia` (84532), `ui/src/wagmi.ts` |
+| Physics step | `shared/sim.ts` (driven by `ui/src/lib/runner.ts`) |
+| Level source | `ui/src/lib/level.ts` → `level/level.json` |
+| Leaderboard + ghost | read from the contract, `ui/src/components/Leaderboard.tsx` |
 
-## Threat model
+## Acceptance checklist
 
-| Attack | What stops it | Test that proves it |
-| --- | --- | --- |
-| Edit the client to fake a finish/score | Only raw input bytes are uploaded; the chain re-simulates them itself and derives the time. Local numbers are never trusted. | `test_timeIsDerivedOnlyFromInputs`, `test_fuzzVectorsMatchContract` (300 vectors) |
-| Send a "fake time" in the transaction | `submitRun` has **no time parameter** — it accepts only `bytes inputs`. | `test/source.test.ts` ("submitRun taking only input bytes") |
-| Oversized input | `inputs.length > MAX_TICKS` reverts `InputTooLong` before any simulation; the loop is capped at 600 ticks. | `test_inputsLongerThanMaxTicksRevert`, `test_finishAtMaxTicksPlusOneReverts` |
-| Invalid input bytes (2..255) | Every byte must be 0 or 1; otherwise `InvalidInput`. | `test_invalidInputByteReverts` |
-| Replay someone else's inputs | **Possible by design** (see note below) — inputs are public in `bestInputs`/`RunVerified`, but a replay only credits the same time to *your own* address; it cannot steal or impersonate. | `test_bestInputsReproduceBestTime`, `test_twoPlayersIdenticalInputs` |
-| Submit a run that dies | The chain replays it, hits the hazard, and reverts `RunDied`; nothing is recorded. | `test_runThatHitsHazardRevertsAndRecordsNothing`, `test_diesOnFirstTick` |
-| Never reach the goal | Reverts `GoalNotReached`; nothing is recorded. | `test_runThatNeverReachesGoalRevertsAndRecordsNothing`, `test_solidWallBlocksAndJumpClears` |
-| Grief with a huge `getLeaderboard` limit | `offset + limit` overflow is impossible and the page is capped (`MAX_PAGE`), so reads cannot run out of gas. | `test_leaderboardEdgeCases` |
-| Craft bytes to panic the verifier (overflow/OOB) | Fuzzed for arbitrary and bit inputs: it either records a time in `[1, MAX_TICKS]` or reverts with one of the five documented errors — never a panic. | `testFuzz_submitRunArbitraryBytesNeverPanics`, `testFuzz_submitRunBitInputsNeverPanics` |
+| # | Check | Where |
+|---|---|---|
+| 1 | Frontend targets Base Sepolia | `ui/src/wagmi.ts` |
+| 2 | No credentials in tracked files | `.env` is git-ignored; only `.env.example` placeholders |
+| 3 | Time computed by contract simulation | `src/SpeedrunGhosts.sol`, `test_timeIsDerivedOnlyFromInputs` |
+| 4 | Input length bounded | `MAX_TICKS`, `test_inputsLongerThanMaxTicksRevert` |
+| 5 | Simulation reads level obstacles | `src/SpeedrunGhosts.sol` (solids/hazards loops) |
+| 6 | Unfinished run not recorded | `test_runThatNeverReachesGoalRevertsAndRecordsNothing`, `test_runThatHitsHazardRevertsAndRecordsNothing` |
+| 7 | Integer-only client physics | `shared/sim.ts` |
+| 8 | Single level source | `level/level.json` (`script/Deploy.s.sol`, `ui/src/lib/level.ts`) |
+| 9 | Inputs retrievable from chain | `bestInputs(player)` / `RunVerified` event |
+| 10 | Best replaced only by faster run | `test_fasterRunReplacesBest_slowerAndEqualDoNot` |
 
-> **Honest note:** replaying another player's inputs is **possible and allowed**.
-> `bestInputs` and the `RunVerified` event make every verified run public on
-> chain. Replaying those exact bytes from your own address just reproduces the
-> same time for *you* — it does not take over the original player's record or
-> pretend to be them. This is inherent to a transparent speedrun leaderboard;
-> the run (inputs) is public, the credit (time) is per-address.
+## Run it locally
 
----
-
-## Cost and safety
-
-Measured with `forge test --match-test test_gasFor -vv`:
-
-| Path | Gas |
-| --- | --- |
-| Typical 200-tick run (records a new best) | **754,504** |
-| Non-improving run (no storage write) | **588,031** |
-| Max-length run, 600 ticks | **1,936,319** |
-
-`bestInputs` is written **only** when a run improves the caller's best, so slower
-runs never pay for storage (`test_nonImprovingRunDoesNotWriteBestInputs`).
-
-Slither (`slither-analyzer` 0.11.6, 102 detectors) reports **one informational
-finding**: `submitRun` has cyclomatic complexity 16. It is inherent to a
-deterministic replay loop that scans the level's hazards/solids each tick; the
-loop count is bounded by `MAX_TICKS` and the level arrays are fixed at deploy
-time. No reentrancy, unchecked-arithmetic, or unbounded-loop findings.
-
-Manual pass: no external calls and no ETH transfers (no reentrancy surface); all
-arithmetic is checked (Solidity 0.8.24) and the one potential overflow
-(`getLeaderboard`) is fixed; every loop is bounded (`MAX_TICKS` for inputs,
-`MAX_PAGE` for the leaderboard, deploy-time arrays for hazards/solids). There is
-no owner, no admin, no `selfdestruct`, no upgrade path, and no function that
-accepts a time value (`test/source.test.ts`).
-
----
-
-## One level, one source of truth
-
-`level/level.json` is the single source for all constants and obstacles:
-
-```json
-{
-  "speed": 3, "gravity": 1, "jumpVy": 9, "goalX": 600, "maxTicks": 600,
-  "hazards": [{ "x0": 100, "x1": 113, "h": 12 }, ...],
-  "solids":  [{ "x0": 500, "x1": 509, "h": 12 }]
-}
-```
-
-- The **deploy script** (`script/Deploy.s.sol` via `script/LevelData.sol`) reads
-  this file and passes it to the constructor.
-- The **Foundry tests** read the same file (and `level/vectors.json`).
-- The **UI** imports the same JSON (`ui/src/lib/level.ts`) and the same
-  simulation (`shared/sim.ts`).
-- The contract exposes `getLevel()` so any client can read the level back.
-
-No obstacle data is duplicated in Solidity or JavaScript.
-
-Shared physics: `shared/sim.ts` exports integer-only `step(level, state, input)`
-(used by the live UI) and `simulate(level, inputs)` (used by the tests). The
-contract mirrors it exactly. `level/vectors.json` holds golden vectors that both
-the Foundry test and the frontend vitest replay.
-
----
-
-## Repository layout
-
-```
-src/SpeedrunGhosts.sol        on-chain verifier (submitRun, bestTime, getLeaderboard, getLevel)
-script/Deploy.s.sol           deploy using level/level.json
-script/LevelData.sol          shared JSON -> constructor-args loader
-test/SpeedrunGhosts.t.sol     Foundry tests
-shared/sim.ts                 shared integer physics (step + simulate)
-level/level.json              the level (single source)
-level/vectors.json            golden vectors (contract + UI agreement)
-ui/                           React + Vite + wagmi/viem + canvas dapp
-ui/src/lib/runner.ts          fixed-tick loop (accumulator; no dt in physics)
-ui/src/components/            Game, Leaderboard, SubmitPanel, WalletBar
-```
-
----
-
-## Run and test
-
-### Contract
+Requires [Foundry](https://book.getfoundry.sh/) and Node 20.12+.
 
 ```bash
-git submodule update --init --recursive   # forge-std pinned at v1.17.0
-forge test -vv                            # 32 tests (unit, edge, fuzz, invariants)
-forge script script/Deploy.s.sol -vv
-```
+forge build
+forge test -vv
 
-`lib/forge-std` is a git submodule pinned to `v1.17.0` (see `.gitmodules`).
-`remappings.txt` maps `forge-std/=lib/forge-std/src/`.
-
-### Frontend
-
-```bash
 cd ui
+cp .env.example .env.local   # contract address, RPC
 npm install
-cp .env.example .env    # then set VITE_CONTRACT_ADDRESS
-npm run dev             # http://localhost:5173
-npm test                # 7 tests
-npm run build           # tsc --noEmit && vite build
+npm run dev
 ```
 
-### Shared vectors
+## Deploy your own
 
 ```bash
-npm run vectors         # regenerate level/vectors.json from shared/sim.ts
-npm run fuzz:vectors    # regenerate the 300-vector differential corpus
-npm run test:ts         # root vitest replays golden + fuzz vectors (24 tests)
+cp .env.example .env         # PRIVATE_KEY, BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
+set -a; source <(tr -d '\r' < .env); set +a
+forge script script/Deploy.s.sol:Deploy \
+  --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast
 ```
 
----
+`.env` is git-ignored. Never commit a private key, mnemonic, API key or key-bearing RPC URL.
 
-## Contract address (Base Sepolia)
+## Tests
 
-| | |
-| --- | --- |
-| Network | Base Sepolia (`chainId 84532`) |
-| Public RPC | `https://sepolia.base.org` |
-| Address | `0xb805983974b9407bf8517D1ad11548A820Fa09A7` |
-| Deploy tx | `0xb1583beef6062d7e8f1d1302f2ad0d9dfd016bd422c5f5d42defb17182565cd4` |
-| Deploy block | `47984918` (~48M) |
-| Basescan | `https://sepolia.basescan.org/address/0xb805983974b9407bf8517D1ad11548A820Fa09A7` |
+`forge test -vv`: `32` tests passing. They cover: valid run time, over-long input, run that never reaches the goal, hazard death, slower run not replacing the best, inputs retrievable.
 
-The machine-readable record lives in [`deployments/base-sepolia.json`](deployments/base-sepolia.json).
-`ui/.env.local` (git-ignored) points the dapp at this address.
+## Security notes
 
-To redeploy:
-
-```bash
-cp .env.example .env    # add PRIVATE_KEY=0x... (funded on Base Sepolia)
-forge script script/Deploy.s.sol \
-  --rpc-url https://sepolia.base.org \
-  --broadcast
-# then set VITE_CONTRACT_ADDRESS in ui/.env.local to the printed address
-```
-
----
-
-## Wallet
-
-- Injected wallets (MetaMask, Rabby, ...) and **Coinbase Wallet** connectors.
-- If the connected chain is not Base Sepolia, the dapp shows a
-  **Switch to Base Sepolia** button.
-- Smart-wallet / passkey sign-in (Base Account SDK) is **not enabled** in this
-  build; the connector list is intentionally minimal.
-
----
-
-## Security
-
-`.env`, `.env.local`, `dist/`, `node_modules/`, `out/`, `cache/`, and
-`broadcast/` are git-ignored. `.env.example` files contain placeholders only.
-Never commit a private key, mnemonic, or key-bearing RPC URL.
+- The contract has no owner and no admin function. Time comes only from the contract's own simulation.
+- No credentials are committed.
