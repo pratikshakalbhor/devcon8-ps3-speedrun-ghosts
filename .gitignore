@@ -1,0 +1,14 @@
+.env
+.env.local
+.env.*.local
+node_modules
+node_modules_partial_bak
+out/
+cache/
+broadcast/
+foundry-pp/
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
