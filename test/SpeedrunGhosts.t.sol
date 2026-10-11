@@ -519,6 +519,35 @@ contract SpeedrunGhostsTest is Test {
         assertLt(used, 2_500_000);
     }
 
+    function test_gasForTypicalRunSubmission() public {
+        bytes memory inputs = _clean(); // 200 ticks, records a new best
+
+        vm.prank(ALICE);
+        uint256 before = gasleft();
+        game.submitRun(inputs);
+        uint256 used = before - gasleft();
+
+        emit log_named_uint("typical 200-tick submitRun gas", used);
+        assertEq(game.bestTime(ALICE), 200);
+        assertLt(used, 1_000_000);
+    }
+
+    function test_nonImprovingRunDoesNotWriteBestInputs() public {
+        vm.prank(ALICE);
+        game.submitRun(_clean());
+        bytes32 beforeHash = keccak256(game.bestInputs(ALICE));
+
+        vm.prank(ALICE);
+        uint256 before = gasleft();
+        game.submitRun(_lateWall()); // slower: must not overwrite storage
+        uint256 used = before - gasleft();
+
+        emit log_named_uint("non-improving submitRun gas", used);
+        assertEq(keccak256(game.bestInputs(ALICE)), beforeHash);
+        assertEq(game.bestTime(ALICE), 200);
+        assertEq(game.playersCount(), 1);
+    }
+
     // ------------------------------------------------------------------
     // Explicit edge cases
     // ------------------------------------------------------------------
