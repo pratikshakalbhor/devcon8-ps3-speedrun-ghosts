@@ -6,6 +6,7 @@
   "description": "On-chain deterministic speedrun verifier with a shared TypeScript simulation.",
   "scripts": {
     "vectors": "tsx scripts/generate-vectors.ts",
+    "fuzz:vectors": "tsx scripts/generate-fuzz-vectors.ts",
     "test:ts": "vitest run",
     "typecheck": "tsc --noEmit"
   },

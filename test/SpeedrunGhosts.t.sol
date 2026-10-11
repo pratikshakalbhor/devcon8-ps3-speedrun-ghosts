@@ -24,6 +24,16 @@ contract SpeedrunGhostsTest is Test {
 
     Vector[] internal vectors;
 
+    struct FuzzVector {
+        string name;
+        bytes inputs;
+        string status;
+        uint256 time;
+        uint256 tick;
+    }
+
+    FuzzVector[] internal fuzzVectors;
+
     address internal constant ALICE = address(0xA11CE);
     address internal constant BOB = address(0xB0B);
 
@@ -36,6 +46,7 @@ contract SpeedrunGhostsTest is Test {
         );
         game = new SpeedrunGhosts(speed, gravity, jumpVy, goalX, hazards, solids);
         _loadVectors();
+        _loadFuzzVectors();
     }
 
     function _loadVectors() internal {
@@ -45,6 +56,23 @@ contract SpeedrunGhostsTest is Test {
             string memory base = string.concat(".vectors[", vm.toString(i), "]");
             vectors.push(
                 Vector({
+                    name: vm.parseJsonString(json, string.concat(base, ".name")),
+                    inputs: vm.parseBytes(vm.parseJsonString(json, string.concat(base, ".inputs"))),
+                    status: vm.parseJsonString(json, string.concat(base, ".status")),
+                    time: vm.parseJsonUint(json, string.concat(base, ".time")),
+                    tick: vm.parseJsonUint(json, string.concat(base, ".tick"))
+                })
+            );
+        }
+    }
+
+    function _loadFuzzVectors() internal {
+        string memory json = vm.readFile("level/fuzz-vectors.json");
+        uint256 count = vm.parseJsonArrayLength(json, ".vectors");
+        for (uint256 i = 0; i < count; i++) {
+            string memory base = string.concat(".vectors[", vm.toString(i), "]");
+            fuzzVectors.push(
+                FuzzVector({
                     name: vm.parseJsonString(json, string.concat(base, ".name")),
                     inputs: vm.parseBytes(vm.parseJsonString(json, string.concat(base, ".inputs"))),
                     status: vm.parseJsonString(json, string.concat(base, ".status")),
@@ -373,6 +401,108 @@ contract SpeedrunGhostsTest is Test {
             } else {
                 revert("unknown vector status");
             }
+        }
+    }
+
+    function test_fuzzVectorsMatchContract() public {
+        assertGt(fuzzVectors.length, 0, "fuzz corpus must be loaded");
+
+        for (uint256 i = 0; i < fuzzVectors.length; i++) {
+            FuzzVector memory v = fuzzVectors[i];
+            address player = address(uint160(0x500000 + i));
+            bytes32 statusHash = keccak256(bytes(v.status));
+
+            if (statusHash == keccak256("goal")) {
+                vm.prank(player);
+                game.submitRun(v.inputs);
+                assertEq(game.bestTime(player), v.time, v.name);
+                assertEq(game.bestInputs(player), v.inputs, v.name);
+            } else if (statusHash == keccak256("died")) {
+                vm.prank(player);
+                vm.expectRevert(SpeedrunGhosts.RunDied.selector);
+                game.submitRun(v.inputs);
+                assertEq(game.bestTime(player), 0, v.name);
+            } else if (statusHash == keccak256("goalNotReached")) {
+                vm.prank(player);
+                vm.expectRevert(SpeedrunGhosts.GoalNotReached.selector);
+                game.submitRun(v.inputs);
+                assertEq(game.bestTime(player), 0, v.name);
+            } else if (statusHash == keccak256("inputTooLong")) {
+                vm.prank(player);
+                vm.expectRevert(SpeedrunGhosts.InputTooLong.selector);
+                game.submitRun(v.inputs);
+            } else if (statusHash == keccak256("emptyInputs")) {
+                vm.prank(player);
+                vm.expectRevert(SpeedrunGhosts.EmptyInputs.selector);
+                game.submitRun(v.inputs);
+            } else if (statusHash == keccak256("invalidInput")) {
+                vm.prank(player);
+                vm.expectRevert(SpeedrunGhosts.InvalidInput.selector);
+                game.submitRun(v.inputs);
+            } else {
+                revert(string.concat("unknown fuzz status: ", v.status));
+            }
+        }
+    }
+
+    /// @dev Any byte sequence must either be accepted (recording a time in
+    ///      [1, MAX_TICKS]) or revert with one of the five documented errors.
+    ///      It must never panic (overflow, array OOB) and never accept a bogus time.
+    function testFuzz_submitRunArbitraryBytesNeverPanics(bytes memory inputs) public {
+        vm.assume(inputs.length <= game.MAX_TICKS());
+
+        address player = address(0xF00D);
+        vm.prank(player);
+        (bool ok, bytes memory ret) = address(game).call(
+            abi.encodeWithSelector(SpeedrunGhosts.submitRun.selector, inputs)
+        );
+
+        if (ok) {
+            uint32 t = game.bestTime(player);
+            assertGe(t, 1);
+            assertLe(t, game.MAX_TICKS());
+        } else {
+            bytes4 sel = bytes4(ret);
+            assertTrue(
+                sel == SpeedrunGhosts.EmptyInputs.selector
+                    || sel == SpeedrunGhosts.InputTooLong.selector
+                    || sel == SpeedrunGhosts.InvalidInput.selector
+                    || sel == SpeedrunGhosts.RunDied.selector
+                    || sel == SpeedrunGhosts.GoalNotReached.selector,
+                "unexpected revert selector (panic?)"
+            );
+        }
+    }
+
+    /// @dev Stronger physics fuzz: well-formed 0/1 inputs so the loop actually
+    ///      runs, checking the same accept-or-documented-error oracle.
+    function testFuzz_submitRunBitInputsNeverPanics(uint8[] memory seed) public {
+        uint256 length = seed.length % (game.MAX_TICKS() + 1);
+        bytes memory inputs = new bytes(length);
+        for (uint256 i = 0; i < length; i++) {
+            inputs[i] = bytes1(seed[i] % 2);
+        }
+
+        address player = address(0xBEEF);
+        vm.prank(player);
+        (bool ok, bytes memory ret) = address(game).call(
+            abi.encodeWithSelector(SpeedrunGhosts.submitRun.selector, inputs)
+        );
+
+        if (ok) {
+            uint32 t = game.bestTime(player);
+            assertGe(t, 1);
+            assertLe(t, game.MAX_TICKS());
+        } else {
+            bytes4 sel = bytes4(ret);
+            assertTrue(
+                sel == SpeedrunGhosts.EmptyInputs.selector
+                    || sel == SpeedrunGhosts.InputTooLong.selector
+                    || sel == SpeedrunGhosts.InvalidInput.selector
+                    || sel == SpeedrunGhosts.RunDied.selector
+                    || sel == SpeedrunGhosts.GoalNotReached.selector,
+                "unexpected revert selector (panic?)"
+            );
         }
     }
 

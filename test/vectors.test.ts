@@ -19,6 +19,9 @@ const level = JSON.parse(readFileSync(resolve(root, "level/level.json"), "utf8")
 const golden = JSON.parse(readFileSync(resolve(root, "level/vectors.json"), "utf8")) as {
   vectors: { name: string; inputs: string; status: string; time: number; tick: number }[];
 };
+const fuzz = JSON.parse(readFileSync(resolve(root, "level/fuzz-vectors.json"), "utf8")) as {
+  vectors: { name: string; inputs: string; status: string; time: number; tick: number }[];
+};
 
 describe("shared simulation golden vectors", () => {
   it("replays every golden vector with the same outcome as the contract", () => {
@@ -56,6 +59,16 @@ describe("shared simulation golden vectors", () => {
   it("forces at least three jumps via hazards and a solid wall", () => {
     expect(level.hazards.length).toBeGreaterThanOrEqual(3);
     expect(level.solids.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("replays the entire differential fuzz corpus", () => {
+    expect(fuzz.vectors.length).toBe(300);
+    for (const v of fuzz.vectors) {
+      const result: SimResult = simulate(level, hexToBytes(v.inputs));
+      expect(result.status, v.name).toBe(v.status);
+      if (result.status === "goal") expect(result.time, v.name).toBe(v.time);
+      if (result.status === "died") expect(result.tick, v.name).toBe(v.tick);
+    }
   });
 
   it("rejects input bytes other than 0 and 1", () => {
