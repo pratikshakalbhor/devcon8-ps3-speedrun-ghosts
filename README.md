@@ -198,23 +198,23 @@ npm run test:ts         # root vitest replays golden + fuzz vectors (24 tests)
 | --- | --- |
 | Network | Base Sepolia (`chainId 84532`) |
 | Public RPC | `https://sepolia.base.org` |
-| Address | `VITE_CONTRACT_ADDRESS` (see note) |
-| Basescan | `https://sepolia.basescan.org/address/<address>` |
+| Address | `0xb805983974b9407bf8517D1ad11548A820Fa09A7` |
+| Deploy tx | `0xb1583beef6062d7e8f1d1302f2ad0d9dfd016bd422c5f5d42defb17182565cd4` |
+| Deploy block | `47984918` (~48M) |
+| Basescan | `https://sepolia.basescan.org/address/0xb805983974b9407bf8517D1ad11548A820Fa09A7` |
 
-> A live address is not bundled in this repository because no funded Base
-> Sepolia key is available in the build environment. Deploy it and paste the
-> result:
+The machine-readable record lives in [`deployments/base-sepolia.json`](deployments/base-sepolia.json).
+`ui/.env.local` (git-ignored) points the dapp at this address.
+
+To redeploy:
 
 ```bash
 cp .env.example .env    # add PRIVATE_KEY=0x... (funded on Base Sepolia)
 forge script script/Deploy.s.sol \
   --rpc-url https://sepolia.base.org \
   --broadcast
-# then set VITE_CONTRACT_ADDRESS in ui/.env to the printed address
+# then set VITE_CONTRACT_ADDRESS in ui/.env.local to the printed address
 ```
-
-Example Basescan link after deploying:
-`https://sepolia.basescan.org/address/0xYourDeployedAddress`.
 
 ---
 

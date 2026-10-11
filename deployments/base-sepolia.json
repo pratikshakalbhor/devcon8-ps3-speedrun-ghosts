@@ -1,0 +1,18 @@
+{
+  "network": "base-sepolia",
+  "chainId": 84532,
+  "contract": "SpeedrunGhosts",
+  "address": "0xb805983974b9407bf8517D1ad11548A820Fa09A7",
+  "deployer": "0xfF74D8F79A71c53B6f17a019c93D0999cAB23a0A",
+  "transactionHash": "0xb1583beef6062d7e8f1d1302f2ad0d9dfd016bd422c5f5d42defb17182565cd4",
+  "blockNumber": 47984918,
+  "basescan": "https://sepolia.basescan.org/address/0xb805983974b9407bf8517D1ad11548A820Fa09A7",
+  "level": "level/level.json",
+  "levelMd5": "55b608f3d1ebc8e02b97bee40c41d2d7",
+  "smokeTest": {
+    "description": "200-tick clean run submitted by deployer",
+    "transactionHash": "0x8fcf6e93d2a9f048d011fb3c2a87b7d992d8f0d95f4e439a17c7659b22dd59ee",
+    "blockNumber": 47984996,
+    "bestTime": 200
+  }
+}
