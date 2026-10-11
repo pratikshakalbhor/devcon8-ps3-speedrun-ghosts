@@ -62,6 +62,57 @@ a spike, never reach the goal, or run too long, and then reject the run. Also,
 
 ---
 
+## Threat model
+
+| Attack | What stops it | Test that proves it |
+| --- | --- | --- |
+| Edit the client to fake a finish/score | Only raw input bytes are uploaded; the chain re-simulates them itself and derives the time. Local numbers are never trusted. | `test_timeIsDerivedOnlyFromInputs`, `test_fuzzVectorsMatchContract` (300 vectors) |
+| Send a "fake time" in the transaction | `submitRun` has **no time parameter** — it accepts only `bytes inputs`. | `test/source.test.ts` ("submitRun taking only input bytes") |
+| Oversized input | `inputs.length > MAX_TICKS` reverts `InputTooLong` before any simulation; the loop is capped at 600 ticks. | `test_inputsLongerThanMaxTicksRevert`, `test_finishAtMaxTicksPlusOneReverts` |
+| Invalid input bytes (2..255) | Every byte must be 0 or 1; otherwise `InvalidInput`. | `test_invalidInputByteReverts` |
+| Replay someone else's inputs | **Possible by design** (see note below) — inputs are public in `bestInputs`/`RunVerified`, but a replay only credits the same time to *your own* address; it cannot steal or impersonate. | `test_bestInputsReproduceBestTime`, `test_twoPlayersIdenticalInputs` |
+| Submit a run that dies | The chain replays it, hits the hazard, and reverts `RunDied`; nothing is recorded. | `test_runThatHitsHazardRevertsAndRecordsNothing`, `test_diesOnFirstTick` |
+| Never reach the goal | Reverts `GoalNotReached`; nothing is recorded. | `test_runThatNeverReachesGoalRevertsAndRecordsNothing`, `test_solidWallBlocksAndJumpClears` |
+| Grief with a huge `getLeaderboard` limit | `offset + limit` overflow is impossible and the page is capped (`MAX_PAGE`), so reads cannot run out of gas. | `test_leaderboardEdgeCases` |
+| Craft bytes to panic the verifier (overflow/OOB) | Fuzzed for arbitrary and bit inputs: it either records a time in `[1, MAX_TICKS]` or reverts with one of the five documented errors — never a panic. | `testFuzz_submitRunArbitraryBytesNeverPanics`, `testFuzz_submitRunBitInputsNeverPanics` |
+
+> **Honest note:** replaying another player's inputs is **possible and allowed**.
+> `bestInputs` and the `RunVerified` event make every verified run public on
+> chain. Replaying those exact bytes from your own address just reproduces the
+> same time for *you* — it does not take over the original player's record or
+> pretend to be them. This is inherent to a transparent speedrun leaderboard;
+> the run (inputs) is public, the credit (time) is per-address.
+
+---
+
+## Cost and safety
+
+Measured with `forge test --match-test test_gasFor -vv`:
+
+| Path | Gas |
+| --- | --- |
+| Typical 200-tick run (records a new best) | **754,504** |
+| Non-improving run (no storage write) | **588,031** |
+| Max-length run, 600 ticks | **1,936,319** |
+
+`bestInputs` is written **only** when a run improves the caller's best, so slower
+runs never pay for storage (`test_nonImprovingRunDoesNotWriteBestInputs`).
+
+Slither (`slither-analyzer` 0.11.6, 102 detectors) reports **one informational
+finding**: `submitRun` has cyclomatic complexity 16. It is inherent to a
+deterministic replay loop that scans the level's hazards/solids each tick; the
+loop count is bounded by `MAX_TICKS` and the level arrays are fixed at deploy
+time. No reentrancy, unchecked-arithmetic, or unbounded-loop findings.
+
+Manual pass: no external calls and no ETH transfers (no reentrancy surface); all
+arithmetic is checked (Solidity 0.8.24) and the one potential overflow
+(`getLeaderboard`) is fixed; every loop is bounded (`MAX_TICKS` for inputs,
+`MAX_PAGE` for the leaderboard, deploy-time arrays for hazards/solids). There is
+no owner, no admin, no `selfdestruct`, no upgrade path, and no function that
+accepts a time value (`test/source.test.ts`).
+
+---
+
 ## One level, one source of truth
 
 `level/level.json` is the single source for all constants and obstacles:
@@ -112,7 +163,7 @@ ui/src/components/            Game, Leaderboard, SubmitPanel, WalletBar
 ### Contract
 
 ```bash
-forge test -vv          # 13 tests
+forge test -vv          # 32 tests (unit, edge, fuzz, invariants)
 forge script script/Deploy.s.sol -vv
 ```
 
@@ -131,7 +182,8 @@ npm run build           # tsc --noEmit && vite build
 
 ```bash
 npm run vectors         # regenerate level/vectors.json from shared/sim.ts
-npm run test:ts         # root vitest replays the vectors
+npm run fuzz:vectors    # regenerate the 300-vector differential corpus
+npm run test:ts         # root vitest replays golden + fuzz vectors (24 tests)
 ```
 
 ---
