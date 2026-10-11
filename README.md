@@ -163,9 +163,13 @@ ui/src/components/            Game, Leaderboard, SubmitPanel, WalletBar
 ### Contract
 
 ```bash
-forge test -vv          # 32 tests (unit, edge, fuzz, invariants)
+forge install foundry-rs/forge-std   # lib/ is not vendored in git
+forge test -vv                       # 32 tests (unit, edge, fuzz, invariants)
 forge script script/Deploy.s.sol -vv
 ```
+
+`lib/` is git-ignored (standard Foundry). `remappings.txt` maps
+`forge-std/=lib/forge-std/src/`.
 
 ### Frontend
 
