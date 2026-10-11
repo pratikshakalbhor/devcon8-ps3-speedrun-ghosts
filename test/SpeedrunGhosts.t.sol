@@ -303,6 +303,44 @@ contract SpeedrunGhostsTest is Test {
         assertEq(so[0].x0, 500);
     }
 
+    function _cleanPlusAirborneJump() internal pure returns (bytes memory) {
+        uint256[] memory j = new uint256[](5);
+        j[0] = 28;
+        j[1] = 29; // tick 29 is airborne, so this press must be ignored
+        j[2] = 78;
+        j[3] = 128;
+        j[4] = 160;
+        return _build(200, j);
+    }
+
+    function test_invalidInputByteReverts() public {
+        bytes memory low = _clean();
+        low[10] = 0x02;
+        vm.prank(ALICE);
+        vm.expectRevert(SpeedrunGhosts.InvalidInput.selector);
+        game.submitRun(low);
+
+        bytes memory high = _clean();
+        high[10] = 0xff;
+        vm.prank(ALICE);
+        vm.expectRevert(SpeedrunGhosts.InvalidInput.selector);
+        game.submitRun(high);
+
+        assertEq(game.bestTime(ALICE), 0);
+        assertEq(game.bestInputs(ALICE).length, 0);
+        assertEq(game.playersCount(), 0);
+    }
+
+    function test_airborneJumpIsIgnored() public {
+        bytes memory withAir = _cleanPlusAirborneJump();
+
+        vm.prank(ALICE);
+        game.submitRun(withAir);
+
+        assertEq(game.bestTime(ALICE), 200);
+        assertEq(game.bestInputs(ALICE), withAir);
+    }
+
     function test_goldenVectorsMatchContract() public {
         for (uint256 i = 0; i < vectors.length; i++) {
             Vector memory v = vectors[i];

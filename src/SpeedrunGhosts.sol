@@ -24,6 +24,7 @@ contract SpeedrunGhosts {
 
     error EmptyInputs();
     error InputTooLong();
+    error InvalidInput();
     error RunDied();
     error GoalNotReached();
 
@@ -64,7 +65,8 @@ contract SpeedrunGhosts {
     }
 
     /// @notice Replays `inputs` one tick per byte (0 = none, 1 = jump) and derives the time.
-    /// @dev A run that dies or never reaches the goal reverts and records nothing.
+    /// @dev Input bytes are strict: every byte must be 0 or 1, otherwise `InvalidInput`.
+    ///      A run that dies or never reaches the goal reverts and records nothing.
     ///      A verified but non-improving run does not revert: it emits `RunVerified` and
     ///      leaves the stored personal best untouched.
     function submitRun(bytes calldata inputs) external {
@@ -79,6 +81,7 @@ contract SpeedrunGhosts {
 
         for (uint256 i = 0; i < n; i++) {
             uint8 input = uint8(inputs[i]);
+            if (input > 1) revert InvalidInput();
 
             if (input == 1 && y == 0) {
                 vy = jumpVy;

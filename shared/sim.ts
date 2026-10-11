@@ -19,7 +19,8 @@ export type SimResult =
   | { status: "died"; tick: number }
   | { status: "goalNotReached" }
   | { status: "inputTooLong" }
-  | { status: "emptyInputs" };
+  | { status: "emptyInputs" }
+  | { status: "invalidInput" };
 
 /** Mutable simulation state. All fields are integers. */
 export interface SimState {
@@ -29,7 +30,7 @@ export interface SimState {
   tick: number;
 }
 
-export type StepStatus = "running" | "goal" | "died";
+export type StepStatus = "running" | "goal" | "died" | "invalid";
 
 export function createState(): SimState {
   return { x: 0, y: 0, vy: 0, tick: 0 };
@@ -46,9 +47,13 @@ function blocked(solids: Range[], nx: number, y: number): boolean {
 /**
  * Advance exactly one fixed tick. Integer math only; no wall-clock values ever
  * enter here. Mutates `s` and returns the outcome of this tick.
+ *
+ * Input bytes are strict: only 0 (none) and 1 (jump) are accepted; any other
+ * byte yields the `"invalid"` status, mirroring the on-chain `InvalidInput`.
  */
 export function step(level: Level, s: SimState, input: number): StepStatus {
-  input = input | 0;
+  input = (input | 0) & 0xff;
+  if (input > 1) return "invalid";
   s.tick = (s.tick + 1) | 0;
 
   if (input === 1 && s.y === 0) s.vy = level.jumpVy;
@@ -91,6 +96,7 @@ export function simulate(level: Level, inputs: ArrayLike<number>): SimResult {
   const s = createState();
   for (let i = 0; i < n; i++) {
     const outcome = step(level, s, inputs[i] | 0);
+    if (outcome === "invalid") return { status: "invalidInput" };
     if (outcome === "died") return { status: "died", tick: s.tick };
     if (outcome === "goal") return { status: "goal", time: s.tick };
   }
