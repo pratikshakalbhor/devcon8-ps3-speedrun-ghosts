@@ -518,4 +518,164 @@ contract SpeedrunGhostsTest is Test {
         assertEq(game.bestTime(ALICE), 600);
         assertLt(used, 2_500_000);
     }
+
+    // ------------------------------------------------------------------
+    // Explicit edge cases
+    // ------------------------------------------------------------------
+
+    function _deploy(
+        int256 goalX_,
+        SpeedrunGhosts.Hazard[] memory hazards_,
+        SpeedrunGhosts.Solid[] memory solids_
+    ) internal returns (SpeedrunGhosts g) {
+        g = new SpeedrunGhosts(3, 1, 9, goalX_, hazards_, solids_);
+    }
+
+    function _haz(
+        int256 x0,
+        int256 x1,
+        int256 h
+    ) internal pure returns (SpeedrunGhosts.Hazard[] memory hs) {
+        hs = new SpeedrunGhosts.Hazard[](1);
+        hs[0] = SpeedrunGhosts.Hazard(x0, x1, h);
+    }
+
+    function _sol(
+        int256 x0,
+        int256 x1,
+        int256 h
+    ) internal pure returns (SpeedrunGhosts.Solid[] memory ss) {
+        ss = new SpeedrunGhosts.Solid[](1);
+        ss[0] = SpeedrunGhosts.Solid(x0, x1, h);
+    }
+
+    function _noHazards() internal pure returns (SpeedrunGhosts.Hazard[] memory hs) {
+        hs = new SpeedrunGhosts.Hazard[](0);
+    }
+
+    function _noSolids() internal pure returns (SpeedrunGhosts.Solid[] memory ss) {
+        ss = new SpeedrunGhosts.Solid[](0);
+    }
+
+    function _jump1() internal pure returns (uint256[] memory j) {
+        j = new uint256[](1);
+        j[0] = 1;
+    }
+
+    function test_finishAtMaxTicksIsAccepted() public {
+        vm.prank(ALICE);
+        game.submitRun(_maxLength());
+        assertEq(game.bestTime(ALICE), 600);
+        assertEq(game.playersCount(), 1);
+    }
+
+    function test_finishAtMaxTicksPlusOneReverts() public {
+        // A run can only finish at tick 601 if it carries >= 601 inputs, which
+        // is rejected before simulation. It can never be recorded.
+        bytes memory inputs = _build(game.MAX_TICKS() + 1, new uint256[](0));
+
+        vm.prank(ALICE);
+        vm.expectRevert(SpeedrunGhosts.InputTooLong.selector);
+        game.submitRun(inputs);
+
+        assertEq(game.bestTime(ALICE), 0);
+    }
+
+    function test_diesOnFirstTick() public {
+        SpeedrunGhosts g = _deploy(600, _haz(0, 6, 1), _noSolids());
+
+        bytes memory inputs = new bytes(1);
+        vm.expectRevert(SpeedrunGhosts.RunDied.selector);
+        g.submitRun(inputs);
+    }
+
+    function test_jumpOnFirstTick() public {
+        // The hazard sits low enough that only a first-tick jump clears it.
+        SpeedrunGhosts g = _deploy(9, _haz(0, 6, 5), _noSolids());
+
+        vm.expectRevert(SpeedrunGhosts.RunDied.selector);
+        g.submitRun(_build(3, new uint256[](0)));
+
+        g.submitRun(_build(3, _jump1()));
+        assertEq(g.bestTime(address(this)), 3);
+    }
+
+    function test_spikeBoundariesAreInclusive() public {
+        // x lands exactly on x0 (tick 1, x = 3): must die.
+        SpeedrunGhosts g1 = _deploy(9, _haz(3, 3, 1), _noSolids());
+        vm.expectRevert(SpeedrunGhosts.RunDied.selector);
+        g1.submitRun(_build(3, new uint256[](0)));
+
+        // x lands exactly on x1 (tick 2, x = 6): must die.
+        SpeedrunGhosts g2 = _deploy(9, _haz(4, 6, 1), _noSolids());
+        vm.expectRevert(SpeedrunGhosts.RunDied.selector);
+        g2.submitRun(_build(3, new uint256[](0)));
+
+        // Just outside the range (x = 3 then 6, hazard [4,5]): survives.
+        SpeedrunGhosts g3 = _deploy(9, _haz(4, 5, 1), _noSolids());
+        g3.submitRun(_build(3, new uint256[](0)));
+        assertEq(g3.bestTime(address(this)), 3);
+    }
+
+    function test_solidWallBlocksAndJumpClears() public {
+        SpeedrunGhosts g = _deploy(15, _noHazards(), _sol(9, 9, 12));
+
+        // No jump: stopped at the wall at x = 6 forever.
+        vm.expectRevert(SpeedrunGhosts.GoalNotReached.selector);
+        g.submitRun(_build(20, new uint256[](0)));
+
+        // First-tick jump clears the wall and finishes at tick 5.
+        g.submitRun(_build(10, _jump1()));
+        assertEq(g.bestTime(address(this)), 5);
+    }
+
+    function test_twoPlayersIdenticalInputs() public {
+        bytes memory inputs = _clean();
+
+        vm.prank(ALICE);
+        game.submitRun(inputs);
+        vm.prank(BOB);
+        game.submitRun(inputs);
+
+        assertEq(game.bestTime(ALICE), 200);
+        assertEq(game.bestTime(BOB), 200);
+        assertEq(game.playersCount(), 2);
+
+        (address[] memory addrs, uint32[] memory times) = game.getLeaderboard(0, game.MAX_PAGE());
+        assertEq(addrs.length, 2);
+        assertEq(times[0], 200);
+        assertEq(times[1], 200);
+    }
+
+    function test_leaderboardEdgeCases() public {
+        (address[] memory a, uint32[] memory t) = game.getLeaderboard(0, type(uint256).max);
+        assertEq(a.length, 0);
+        assertEq(t.length, 0);
+
+        vm.prank(ALICE);
+        game.submitRun(_clean());
+
+        // limit 0 returns nothing
+        (a, t) = game.getLeaderboard(0, 0);
+        assertEq(a.length, 0);
+        assertEq(t.length, 0);
+
+        // offset past the end returns nothing
+        (a, t) = game.getLeaderboard(5, 10);
+        assertEq(a.length, 0);
+        assertEq(t.length, 0);
+
+        // huge limit caps to available without overflow or running out of gas
+        (a, t) = game.getLeaderboard(0, type(uint256).max);
+        assertEq(a.length, 1);
+        assertEq(a[0], ALICE);
+        assertEq(t[0], 200);
+
+        vm.prank(BOB);
+        game.submitRun(_clean());
+
+        (a, t) = game.getLeaderboard(1, type(uint256).max);
+        assertEq(a.length, 1);
+        assertEq(a[0], BOB);
+    }
 }

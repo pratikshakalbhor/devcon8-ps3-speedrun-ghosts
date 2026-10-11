@@ -9,6 +9,7 @@ import {
   hexToBytes,
   buildInputs,
   type Level,
+  type Range,
   type SimResult,
 } from "../shared/sim.js";
 
@@ -99,5 +100,50 @@ describe("shared simulation golden vectors", () => {
     const vyAfterGroundJump = s.vy;
     step(level, s, 1);
     expect(s.vy).toBe(vyAfterGroundJump - level.gravity);
+  });
+});
+
+describe("edge semantics (shared with the contract)", () => {
+  const mk = (goalX: number, hazards: Range[], solids: Range[]): Level => ({
+    speed: 3,
+    gravity: 1,
+    jumpVy: 9,
+    goalX,
+    maxTicks: 600,
+    hazards,
+    solids,
+  });
+  const zeros = (n: number) => new Uint8Array(n);
+
+  it("dies on the very first tick when a hazard covers the start", () => {
+    const lvl = mk(600, [{ x0: 0, x1: 6, h: 1 }], []);
+    expect(simulate(lvl, zeros(1))).toEqual({ status: "died", tick: 1 });
+  });
+
+  it("honours a jump pressed on the very first tick", () => {
+    const lvl = mk(9, [{ x0: 0, x1: 6, h: 5 }], []);
+    expect(simulate(lvl, zeros(3))).toEqual({ status: "died", tick: 1 });
+    expect(simulate(lvl, buildInputs(3, [1]))).toEqual({ status: "goal", time: 3 });
+  });
+
+  it("treats spike x0 and x1 as inclusive", () => {
+    expect(simulate(mk(9, [{ x0: 3, x1: 3, h: 1 }], []), zeros(3))).toEqual({
+      status: "died",
+      tick: 1,
+    });
+    expect(simulate(mk(9, [{ x0: 4, x1: 6, h: 1 }], []), zeros(3))).toEqual({
+      status: "died",
+      tick: 2,
+    });
+    expect(simulate(mk(9, [{ x0: 4, x1: 5, h: 1 }], []), zeros(3))).toEqual({
+      status: "goal",
+      time: 3,
+    });
+  });
+
+  it("stops at a solid wall unless jumped over", () => {
+    const lvl = mk(15, [], [{ x0: 9, x1: 9, h: 12 }]);
+    expect(simulate(lvl, zeros(20))).toEqual({ status: "goalNotReached" });
+    expect(simulate(lvl, buildInputs(10, [1]))).toEqual({ status: "goal", time: 5 });
   });
 });

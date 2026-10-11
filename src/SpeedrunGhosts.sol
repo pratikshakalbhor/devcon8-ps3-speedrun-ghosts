@@ -22,6 +22,10 @@ contract SpeedrunGhosts {
     ///         Bounds the worst-case verification cost of `submitRun`.
     uint256 public constant MAX_TICKS = 600;
 
+    /// @notice Hard cap on entries returned by `getLeaderboard`, so a huge
+    ///         `limit` can never make a read run out of gas.
+    uint256 public constant MAX_PAGE = 1000;
+
     error EmptyInputs();
     error InputTooLong();
     error InvalidInput();
@@ -175,11 +179,15 @@ contract SpeedrunGhosts {
         if (offset >= len || limit == 0) {
             return (new address[](0), new uint32[](0));
         }
-        uint256 end = offset + limit;
-        if (end > len) {
-            end = len;
+        // Remaining is well-defined because offset < len. Capping `limit` to it
+        // (and to MAX_PAGE) avoids `offset + limit` overflow and unbounded loops.
+        uint256 count = len - offset;
+        if (limit < count) {
+            count = limit;
         }
-        uint256 count = end - offset;
+        if (count > MAX_PAGE) {
+            count = MAX_PAGE;
+        }
         addrs = new address[](count);
         times = new uint32[](count);
         for (uint256 i = 0; i < count; i++) {
